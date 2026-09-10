@@ -4,7 +4,7 @@ image_classify.py
 Adds image classification to AutoPrep, using the SAME "upload data -> AutoML
 -> live prediction" flow as train_model.py, just for images instead of CSVs.
 
-How it works (transfer learning, not training a CNN from scratch):
+How it works (classical computer-vision features, not a CNN):
     1. User uploads a .zip where each subfolder name is a class label, e.g.
 
         dataset.zip
@@ -15,26 +15,32 @@ How it works (transfer learning, not training a CNN from scratch):
             ├── img001.jpg
             └── img002.jpg
 
-    2. Every image is passed through a small, FROZEN, ImageNet-pretrained
-       CNN (MobileNetV3-Small) to turn it into a short numeric "embedding"
-       vector. No weights are trained here -- this step is just feature
-       extraction, so it's fast and works fine on CPU / free hosting tiers.
-    3. A lightweight classifier (LogisticRegression / RandomForest -- the
-       same models already used for tabular data) is trained on those
-       embeddings. This works well even with a small number of images per
-       class (tens, not thousands), which is realistic for a hackathon demo.
-    4. For live prediction, a new image is embedded the same way and fed to
-       the trained classifier.
+    2. Every image is resized and turned into a fixed-length numeric vector
+       made of two classical, hand-crafted feature types:
+         - a color histogram (captures overall color distribution)
+         - HOG -- Histogram of Oriented Gradients (captures shape/edges)
+       No neural network or pretrained weights are involved.
+    3. Those vectors are scaled and fed into a lightweight classifier
+       (LogisticRegression / RandomForest -- the same models already used
+       for tabular data). This trains in seconds even on CPU.
+    4. For live prediction, a new image is turned into a vector the same way
+       and fed to the trained classifier.
 
-Why this approach instead of training a CNN from scratch:
-    - Works with very little data (a from-scratch CNN needs thousands of
-      images per class to be any good).
-    - Trains in seconds/minutes on CPU -- safe for a live demo.
-    - Small dependency footprint: only torch + torchvision + Pillow.
+Why this approach instead of a pretrained CNN (e.g. torch/torchvision):
+    - Free hosting tiers (like Streamlit Community Cloud) cap memory around
+      1GB. torch + torchvision + a downloaded model checkpoint can exceed
+      that and get the app silently killed -- exactly what a CNN-based
+      version of this file hit in production.
+    - No model weights to download at startup -- one less thing that can
+      fail on a flaky connection during a live demo.
+    - Much lighter dependency footprint: just scikit-image + Pillow, both
+      small, pure-Python-adjacent packages.
+    - Trade-off: lower accuracy than a real CNN, especially on visually
+      similar classes. Works well for visually distinct classes (cats vs
+      dogs, several flower types) which covers most hackathon demos.
 
 Setup:
-    pip install torch torchvision pillow
-    (first run downloads the pretrained MobileNetV3-Small weights, ~10MB)
+    pip install scikit-image pillow
 """
 
 import io
@@ -47,17 +53,17 @@ import numpy as np
 import pandas as pd
 from PIL import Image, UnidentifiedImageError
 
+from skimage.feature import hog
+from skimage.color import rgb2gray
+
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
-import torch
-import torchvision.transforms as T
-from torchvision.models import mobilenet_v3_small, MobileNet_V3_Small_Weights
-
 VALID_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
+IMG_SIZE = (128, 128)  # all images are resized to this before feature extraction
 
 
 # ---------------------------------------------------------------------------
@@ -144,31 +150,8 @@ def profile_image_dataset(paths: list, labels: list) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 2. Feature extraction (frozen pretrained CNN)
+# 2. Feature extraction (color histogram + HOG -- no neural network)
 # ---------------------------------------------------------------------------
-_FEATURE_EXTRACTOR = None
-_PREPROCESS = None
-
-
-def get_feature_extractor():
-    """Load (once) a frozen, pretrained MobileNetV3-Small with its
-    classification head removed, so it outputs a feature embedding instead
-    of ImageNet class scores. Cached as a module-level singleton so repeated
-    calls (e.g. every Streamlit rerun) don't reload the weights.
-    """
-    global _FEATURE_EXTRACTOR, _PREPROCESS
-    if _FEATURE_EXTRACTOR is None:
-        weights = MobileNet_V3_Small_Weights.DEFAULT
-        model = mobilenet_v3_small(weights=weights)
-        model.classifier = torch.nn.Identity()  # strip the ImageNet head
-        model.eval()
-        for p in model.parameters():
-            p.requires_grad = False
-        _FEATURE_EXTRACTOR = model
-        _PREPROCESS = weights.transforms()
-    return _FEATURE_EXTRACTOR, _PREPROCESS
-
-
 def _load_image(path_or_bytes) -> Image.Image:
     if isinstance(path_or_bytes, (bytes, bytearray)):
         img = Image.open(io.BytesIO(path_or_bytes))
@@ -177,27 +160,39 @@ def _load_image(path_or_bytes) -> Image.Image:
     return img.convert("RGB")
 
 
-def embed_images(image_sources: list, batch_size: int = 16) -> np.ndarray:
-    """Turn a list of image paths (or raw bytes) into an (N, D) embedding matrix."""
-    model, preprocess = get_feature_extractor()
-    all_feats = []
+def _extract_feature_vector(img: Image.Image) -> np.ndarray:
+    """Turn one image into a fixed-length numeric vector: a color histogram
+    (16 bins x 3 channels) plus HOG shape features on the grayscale version.
+    """
+    img = img.resize(IMG_SIZE)
+    arr = np.asarray(img, dtype=np.float32) / 255.0  # H x W x 3, values in [0, 1]
 
-    with torch.no_grad():
-        for i in range(0, len(image_sources), batch_size):
-            batch = image_sources[i:i + batch_size]
-            tensors = []
-            for src in batch:
-                img = _load_image(src)
-                tensors.append(preprocess(img))
-            batch_tensor = torch.stack(tensors)
-            feats = model(batch_tensor)
-            all_feats.append(feats.numpy())
+    # Color histogram: distribution of pixel intensities per channel
+    hist_features = []
+    for ch in range(3):
+        hist, _ = np.histogram(arr[:, :, ch], bins=16, range=(0.0, 1.0))
+        hist_features.append(hist.astype(np.float32))
+    color_hist = np.concatenate(hist_features)
+    color_hist /= (color_hist.sum() + 1e-8)  # normalize so image size doesn't matter
 
-    return np.vstack(all_feats)
+    # HOG: captures shape/edges, robust to lighting differences
+    gray = rgb2gray(arr)
+    hog_features = hog(
+        gray, orientations=9, pixels_per_cell=(16, 16),
+        cells_per_block=(2, 2), feature_vector=True,
+    )
+
+    return np.concatenate([color_hist, hog_features]).astype(np.float32)
+
+
+def embed_images(image_sources: list) -> np.ndarray:
+    """Turn a list of image paths (or raw bytes) into an (N, D) feature matrix."""
+    feats = [_extract_feature_vector(_load_image(src)) for src in image_sources]
+    return np.vstack(feats)
 
 
 def embed_single_image(image_source) -> np.ndarray:
-    return embed_images([image_source])[0]
+    return _extract_feature_vector(_load_image(image_source))
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +216,12 @@ def train_image_classifier(paths: list, labels: list, test_size: float = 0.2, ra
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=random_state, stratify=y
     )
+
+    # Color histogram and HOG values live on different scales -- scale them
+    # so neither dominates the other, especially for LogisticRegression.
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
 
     candidates = {
         "LogisticRegression": LogisticRegression(max_iter=2000),
@@ -246,15 +247,18 @@ def train_image_classifier(paths: list, labels: list, test_size: float = 0.2, ra
         "model": best_model,
         "best_model_name": best_name,
         "label_encoder": label_encoder,
+        "scaler": scaler,
         "metrics": metrics,
         "profile": profile,
         "class_names": list(label_encoder.classes_),
     }
 
 
-def predict_image(model, label_encoder, image_source):
+def predict_image(model, label_encoder, image_source, scaler=None):
     """Predict the class of a single new image, returning (label, confidence)."""
     embedding = embed_single_image(image_source).reshape(1, -1)
+    if scaler is not None:
+        embedding = scaler.transform(embedding)
     pred_idx = model.predict(embedding)[0]
     label = label_encoder.inverse_transform([pred_idx])[0]
 

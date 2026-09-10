@@ -139,7 +139,9 @@ if data_mode == "Images (classification)":
             st.image(test_image, caption="Uploaded image", width=250)
             if st.button("🔮 Predict"):
                 image_bytes = test_image.getvalue()
-                label, confidence = predict_image(img_result["model"], img_result["label_encoder"], image_bytes)
+                label, confidence = predict_image(
+                    img_result["model"], img_result["label_encoder"], image_bytes, scaler=img_result.get("scaler")
+                )
 
                 # The model only knows the classes it was trained on -- it has no
                 # "none of these" option, so it will always pick one even for an
