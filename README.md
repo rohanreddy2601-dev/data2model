@@ -1,65 +1,87 @@
-# ApexPlanet Data Analytics Internship — Task 1
+# data2model — AutoPrep
 
-## 📌 Project Overview
-This project is part of my **Data Analytics Internship at ApexPlanet Software Pvt. Ltd.**
-Task 1 focuses on foundational setup, data cleaning, and exploratory data analysis (EDA) on a global e-commerce sales dataset.
+**Turning limited data into validated, ML-ready data — and finding the best model, automatically.**
 
-## 🎯 Objective
-Set up a proper analytics environment, clean a real-world messy dataset, and extract meaningful business insights through exploratory analysis.
+An end-to-end Data Science + AutoML platform built for our Boot Camp & Hackathon 2026 submission.
+Upload any raw CSV, and the app automatically profiles it, cleans it, balances it, engineers features,
+trains multiple ML models with hyperparameter tuning, and explains the best one in plain English.
 
-## 🗂️ Dataset
-- **Name:** E-commerce Sales Dataset
-- **Size:** 51,290 orders × 24 columns
-- **Coverage:** Global orders across multiple markets (US, APAC, EU, Africa, and more)
-- **Key fields:** Order Date, Ship Date, Category, Sub-Category, Sales, Quantity, Discount, Profit, Shipping Cost, Market, Region
+## Live Demo
+_(Add your Streamlit Cloud URL here once deployed)_
 
-## 🛠️ Tools & Libraries
-- Python 3.11
-- Jupyter Notebook
-- pandas, numpy
-- matplotlib, seaborn
-- sqlalchemy
+## Pipeline
 
-## 📁 Project Structure
+| Stage | What Happens |
+|---|---|
+| 1. Data Ingestion | Upload any CSV |
+| 2. Data Profiling | Missing values, duplicates, outliers, imbalance -> AI-Readiness Score (0-100) |
+| 3. Cleaning & Validation | Imputation, de-duplication, encoding |
+| 4. Feature Engineering | Automatic scaling of numeric features |
+| 5. AutoML Model Search | Trains Logistic/Linear Regression, Decision Tree, Random Forest with light hyperparameter tuning (GridSearchCV) + SMOTE for imbalanced classes |
+| 6. Best Model + Report | Picks the best-performing model, shows metrics, and generates a plain-English explanation via LLM |
+
+## Files
+- `app.py` — Streamlit app (upload -> profile -> clean -> train -> predict -> explain)
+- `train_model.py` — Full pipeline: profiling, cleaning, feature engineering, SMOTE, AutoML + tuning
+- `llm_explain.py` — Turns a prediction into a plain-English explanation
+- `requirements.txt` — All dependencies
+
+## Setup
+
+```bash
+python -m venv venv
+# Windows:
+.\venv\Scripts\Activate.ps1
+# Mac/Linux:
+source venv/bin/activate
+
+pip install -r requirements.txt
 ```
-apexplanet-data-analytics/
-├── data/               # Raw and cleaned datasets
-├── notebooks/          # Jupyter notebooks with EDA
-├── scripts/            # Reusable Python scripts
-├── reports/            # Summary reports
-├── dashboards/         # Visualization dashboards
-└── README.md
+
+## Run locally
+
+```bash
+streamlit run app.py
 ```
 
-## 🧹 Data Cleaning Steps
-1. Removed 232 empty/junk columns introduced during Excel → CSV conversion
-2. Checked and confirmed no duplicate records
-3. Converted `Order Date` and `Ship Date` from text to proper datetime format
-4. Converted categorical columns (Ship Mode, Segment, Market, Region, Category, Sub-Category, Order Priority) to category dtype for efficiency
-5. Identified and handled outliers in `Sales` and `Profit` using the IQR method
+Opens at `http://localhost:8501`.
 
-## 📊 Exploratory Data Analysis
-- Distribution analysis of Sales (histogram, boxplot)
-- Total Sales by Category (bar chart)
-- Monthly Sales trend over time (line chart)
-- Correlation heatmap across Sales, Quantity, Discount, Profit, and Shipping Cost
+## LLM Explanation Setup
 
-## 💡 Key Insights
-1. **Postal Code is missing in ~80% of orders** — not a data quality issue, but a reflection of the dataset's global scope, since postal codes were only reliably captured for US-based orders.
-2. **Some orders are highly unprofitable**, with Profit ranging from -6,599 to +8,399 — heavy discounting and high shipping costs can turn otherwise strong sales into losses.
-3. **Sales are right-skewed**, with most orders falling in the low-to-mid value range and a small number of large orders pulling the average up — typical of retail/e-commerce data.
-4. Outlier removal on Sales and Profit reduced the dataset by ~26.5%, showing a meaningful share of orders sit outside "typical" ranges — worth analyzing separately rather than discarding entirely.
-5. Certain product categories consistently outperform others in total sales, highlighting where the business generates the most revenue.
-
-## 🚀 How to Run
-1. Clone this repository
-2. Install dependencies:
+1. Get an API key from [OpenAI](https://platform.openai.com/).
+2. Set it as an environment variable:
+   ```bash
+   export OPENAI_API_KEY="your-key-here"      # Mac/Linux
+   setx OPENAI_API_KEY "your-key-here"         # Windows
    ```
-   pip install pandas numpy matplotlib seaborn plotly sqlalchemy openpyxl
+3. Test it directly:
+   ```bash
+   python llm_explain.py
    ```
-3. Open `notebooks/01_eda.ipynb` in Jupyter Notebook
-4. Run all cells
+   If no key is set, the app still works — it falls back to a simple templated sentence so the demo never breaks.
 
-## 👤 Author
-**Yelletiwar Rohan Reddy**
-Data Analytics Intern @ ApexPlanet Software Pvt. Ltd.
+## Deploying (free, via Streamlit Community Cloud)
+
+1. Push this repo to GitHub (already done ✅).
+2. Go to [share.streamlit.io](https://share.streamlit.io), sign in with GitHub.
+3. Select this repo (`data2model`), branch `main`, main file `app.py`.
+4. Under **Advanced settings -> Secrets**, add:
+   ```
+   OPENAI_API_KEY = "your-key-here"
+   ```
+5. Deploy. You'll get a live URL to put on your pitch slide.
+
+## Team Roles
+
+- **Data cleaning & profiling** — owns Stage 2-3
+- **Model training & tuning** — owns Stage 4-5
+- **Streamlit UI / app polish** — owns the interface
+- **LLM explanation, deployment, pitch** — owns Stage 6 + demo
+
+## Recommended Test Dataset
+
+[Loan Prediction Dataset](https://www.kaggle.com) — has real missing values, categorical columns, and
+class imbalance, so it properly demonstrates the readiness score, cleaning, and SMOTE balancing.
+
+---
+Built for Sri Indu College of Engineering & Technology — Boot Camp & Hackathon 2026.
