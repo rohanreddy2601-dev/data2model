@@ -32,9 +32,9 @@ from image_classify import (
     predict_image,
 )
 
-st.set_page_config(page_title="AutoPrep — Data-to-Model Platform", layout="wide")
+st.set_page_config(page_title="Data2Model — Data-to-Model Platform", layout="wide")
 
-st.title("AutoPrep")
+st.title("Data2Model")
 st.caption("Turning limited data into validated, ML-ready data — and finding the best model, automatically.")
 
 # ---------------------------------------------------------------------------
