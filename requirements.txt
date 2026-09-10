@@ -7,3 +7,6 @@ seaborn
 openai
 imbalanced-learn
 scipy
+torch
+torchvision
+pillow

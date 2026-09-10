@@ -53,10 +53,8 @@ def profile_dataset(df: pd.DataFrame, target_col: str = None) -> dict:
     duplicate_pct = round(df.duplicated().sum() / n_rows * 100, 2)
 
     imbalance_ratio = None
-    class_counts = None
     if target_col and target_col in df.columns and not pd.api.types.is_numeric_dtype(df[target_col]):
         counts = df[target_col].value_counts()
-        class_counts = counts.to_dict()
         if len(counts) > 1:
             imbalance_ratio = round(counts.min() / counts.max(), 3)
 
@@ -83,7 +81,6 @@ def profile_dataset(df: pd.DataFrame, target_col: str = None) -> dict:
         "duplicate_pct": duplicate_pct,
         "outlier_pct": outlier_pct,
         "imbalance_ratio": imbalance_ratio,
-        "class_counts": class_counts,
         "readiness_score": score,
     }
 
@@ -139,68 +136,6 @@ def engineer_features(X: pd.DataFrame):
     return X_scaled, scaler, numeric_cols
 
 
-def generate_synthetic_rows(X_train: pd.DataFrame, y_train: pd.Series, task_type: str,
-                             target_min_rows: int, random_state: int = 42):
-    """Grow a small training set toward `target_min_rows` using bootstrap + noise
-    (a lightweight, dependency-free synthetic augmentation technique).
-
-    Classification: samples proportionally per class, so the original class
-    ratio is preserved (this is why augmentation and balancing are separate
-    controls -- augmentation grows the dataset, balancing fixes its ratio).
-    Regression: samples globally, with small noise added to numeric features
-    and the target.
-
-    Returns: augmented X_train, augmented y_train, number of synthetic rows added
-    """
-    current_n = len(X_train)
-    need = target_min_rows - current_n
-    if need <= 0:
-        return X_train, y_train, 0
-
-    rng = np.random.RandomState(random_state)
-    numeric_cols = X_train.select_dtypes(include="number").columns.tolist()
-    stds = X_train[numeric_cols].std().replace(0, 1) if numeric_cols else None
-
-    synth_X_parts, synth_y_parts = [], []
-
-    if task_type == "classification":
-        class_props = y_train.value_counts(normalize=True)
-        for cls, prop in class_props.items():
-            n_needed = int(round(need * prop))
-            if n_needed <= 0:
-                continue
-            cls_idx = y_train[y_train == cls].index
-            sampled_idx = rng.choice(cls_idx, size=n_needed, replace=True)
-            sampled_X = X_train.loc[sampled_idx].reset_index(drop=True)
-            if numeric_cols:
-                noise = rng.normal(0, 0.05, size=(len(sampled_X), len(numeric_cols)))
-                sampled_X[numeric_cols] = sampled_X[numeric_cols].values + noise * stds.values
-            synth_X_parts.append(sampled_X)
-            synth_y_parts.append(pd.Series([cls] * len(sampled_X)))
-    else:
-        sampled_idx = rng.choice(X_train.index, size=need, replace=True)
-        sampled_X = X_train.loc[sampled_idx].reset_index(drop=True)
-        sampled_y = y_train.loc[sampled_idx].reset_index(drop=True)
-        if numeric_cols:
-            noise = rng.normal(0, 0.05, size=(len(sampled_X), len(numeric_cols)))
-            sampled_X[numeric_cols] = sampled_X[numeric_cols].values + noise * stds.values
-        y_std = y_train.std() if y_train.std() > 0 else 1
-        sampled_y = sampled_y + rng.normal(0, 0.02, size=len(sampled_y)) * y_std
-        synth_X_parts.append(sampled_X)
-        synth_y_parts.append(sampled_y)
-
-    if not synth_X_parts:
-        return X_train, y_train, 0
-
-    synth_X = pd.concat(synth_X_parts, ignore_index=True)
-    synth_y = pd.concat(synth_y_parts, ignore_index=True)
-
-    X_aug = pd.concat([X_train.reset_index(drop=True), synth_X], ignore_index=True)
-    y_aug = pd.concat([y_train.reset_index(drop=True), synth_y], ignore_index=True)
-
-    return X_aug, y_aug, len(synth_X)
-
-
 def detect_task_type(y: pd.Series) -> str:
     """Very simple heuristic: few unique values / non-numeric -> classification."""
     if not pd.api.types.is_numeric_dtype(y):
@@ -212,16 +147,9 @@ def detect_task_type(y: pd.Series) -> str:
 
 
 def train_and_select_best(df: pd.DataFrame, target_col: str, test_size: float = 0.2,
-                           random_state: int = 42, use_synthetic: bool = True,
-                           synthetic_min_rows: int = 500, use_balancing: bool = True,
-                           tune_hyperparams: bool = True):
-    """Full pipeline: profile -> clean -> engineer features -> split ->
-    synthetic augmentation (train split only) -> balance (train split only) ->
+                           random_state: int = 42, use_smote: bool = True, tune_hyperparams: bool = True):
+    """Full 6-stage pipeline: profile -> clean -> engineer features -> balance ->
     AutoML search (with light hyperparameter tuning) -> return best model + report.
-
-    Synthetic data and balancing are applied ONLY to the training split --
-    the test split always stays real, so reported metrics reflect real-world
-    performance, not inflated synthetic performance.
     """
 
     if target_col not in df.columns:
@@ -246,36 +174,18 @@ def train_and_select_best(df: pd.DataFrame, target_col: str, test_size: float = 
     X_train, X_test, y_train, y_test = train_test_split(
         X_scaled, y, test_size=test_size, random_state=random_state
     )
-    test_rows = len(X_test)
 
-    train_class_counts_before = y_train.value_counts().to_dict() if task_type == "classification" else None
-
-    # Synthetic augmentation (training split only)
-    synthetic_applied = False
-    synthetic_added = 0
-    if use_synthetic:
-        X_train, y_train, synthetic_added = generate_synthetic_rows(
-            X_train, y_train, task_type, synthetic_min_rows, random_state=random_state
-        )
-        synthetic_applied = synthetic_added > 0
-
-    # Balancing (training split only) -- separate from augmentation on purpose:
-    # augmentation grows the dataset, balancing fixes its class ratio.
-    balance_applied = False
-    balance_method = "Not applied"
-    if task_type == "classification" and use_balancing and _SMOTE_AVAILABLE:
+    # Balance classes with SMOTE if classification + imbalance is significant
+    smote_applied = False
+    if task_type == "classification" and use_smote and _SMOTE_AVAILABLE:
         counts = y_train.value_counts()
         if len(counts) > 1 and counts.min() / counts.max() < 0.5 and counts.min() >= 6:
             try:
                 smote = SMOTE(random_state=random_state, k_neighbors=min(5, counts.min() - 1))
                 X_train, y_train = smote.fit_resample(X_train, y_train)
-                balance_applied = True
-                balance_method = "SMOTE"
+                smote_applied = True
             except Exception:
-                balance_applied = False
-                balance_method = "Not applied"
-
-    train_class_counts_after = y_train.value_counts().to_dict() if task_type == "classification" else None
+                smote_applied = False
 
     # Stage 5: AutoML model search (+ light hyperparameter tuning)
     if task_type == "classification":
@@ -297,6 +207,7 @@ def train_and_select_best(df: pd.DataFrame, target_col: str, test_size: float = 
 
     for name, (model, param_grid) in candidates.items():
         if tune_hyperparams and param_grid:
+            # Small, fast grid so this stays quick enough for a live demo
             search = GridSearchCV(model, param_grid, cv=3, n_jobs=-1)
             search.fit(X_train, y_train)
             fitted_model = search.best_estimator_
@@ -321,10 +232,12 @@ def train_and_select_best(df: pd.DataFrame, target_col: str, test_size: float = 
                 "mae": round(mean_absolute_error(y_test, preds), 4),
             }
 
+    # Pick the best model: highest accuracy (classification) or highest R2 (regression)
     score_key = "accuracy" if task_type == "classification" else "r2"
     best_name = max(metrics, key=lambda name: metrics[name][score_key])
     best_model = trained_models[best_name]
 
+    # Feature importance if the model supports it (tree-based models do)
     feature_importance = None
     if hasattr(best_model, "feature_importances_"):
         feature_importance = dict(zip(feature_cols, best_model.feature_importances_.round(4)))
@@ -334,20 +247,13 @@ def train_and_select_best(df: pd.DataFrame, target_col: str, test_size: float = 
         "best_model_name": best_name,
         "best_params": best_params.get(best_name),
         "task_type": task_type,
-        "target_col": target_col,
         "metrics": metrics,
         "encoders": encoders,
         "feature_cols": feature_cols,
         "feature_importance": feature_importance,
         "scaler": scaler,
         "scaled_cols": scaled_cols,
-        "synthetic_applied": synthetic_applied,
-        "synthetic_added": synthetic_added,
-        "balance_applied": balance_applied,
-        "balance_method": balance_method,
-        "test_rows": test_rows,
-        "train_class_counts_before": train_class_counts_before,
-        "train_class_counts_after": train_class_counts_after,
+        "smote_applied": smote_applied,
         "profile_before": profile_before,
         "profile_after": profile_after,
     }
