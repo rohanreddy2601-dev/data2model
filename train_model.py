@@ -146,10 +146,65 @@ def detect_task_type(y: pd.Series) -> str:
     return "regression"
 
 
+def pad_with_synthetic_data(X_train: pd.DataFrame, y_train: pd.Series, task_type: str,
+                             min_rows: int, random_state: int = 42):
+    """Stage 3b -- Synthetic data generation.
+
+    Hackathon datasets are often tiny (a few dozen rows), which makes
+    train/test splits noisy and hyperparameter search unreliable. If the
+    training set has fewer than `min_rows` rows, this pads it up by
+    duplicating existing rows with a small amount of Gaussian noise added to
+    numeric columns, so the duplicates aren't exact copies. For
+    classification, duplicates are drawn proportionally to existing class
+    frequencies so class balance isn't skewed by padding alone.
+
+    Only ever applied to the TRAINING split -- the test set is never touched,
+    so reported metrics still reflect performance on real data.
+
+    Returns (X_padded, y_padded, synthetic_rows_added).
+    """
+    current_rows = len(X_train)
+    if current_rows >= min_rows:
+        return X_train, y_train, 0
+
+    rng = np.random.RandomState(random_state)
+    rows_needed = min_rows - current_rows
+
+    if task_type == "classification":
+        class_fracs = y_train.value_counts(normalize=True)
+        sample_idx = []
+        for cls, frac in class_fracs.items():
+            n_cls = max(1, int(round(rows_needed * frac)))
+            cls_indices = y_train[y_train == cls].index.to_numpy()
+            sample_idx.extend(rng.choice(cls_indices, size=n_cls, replace=True))
+        sample_idx = sample_idx[:rows_needed]
+    else:
+        sample_idx = rng.choice(y_train.index.to_numpy(), size=rows_needed, replace=True)
+
+    X_synth = X_train.loc[sample_idx].reset_index(drop=True).copy()
+    y_synth = y_train.loc[sample_idx].reset_index(drop=True).copy()
+
+    # Jitter numeric columns slightly so synthetic rows aren't exact duplicates
+    numeric_cols = X_synth.select_dtypes(include="number").columns
+    for col in numeric_cols:
+        col_std = X_train[col].std()
+        if col_std and col_std > 0:
+            noise = rng.normal(0, col_std * 0.05, size=len(X_synth))
+            X_synth[col] = X_synth[col] + noise
+
+    X_padded = pd.concat([X_train, X_synth], ignore_index=True)
+    y_padded = pd.concat([y_train.reset_index(drop=True), y_synth], ignore_index=True)
+
+    return X_padded, y_padded, len(X_synth)
+
+
 def train_and_select_best(df: pd.DataFrame, target_col: str, test_size: float = 0.2,
-                           random_state: int = 42, use_smote: bool = True, tune_hyperparams: bool = True):
-    """Full 6-stage pipeline: profile -> clean -> engineer features -> balance ->
-    AutoML search (with light hyperparameter tuning) -> return best model + report.
+                           random_state: int = 42, use_synthetic: bool = True,
+                           synthetic_min_rows: int = 500, use_balancing: bool = True,
+                           tune_hyperparams: bool = True):
+    """Full pipeline: profile -> clean -> engineer features -> pad with synthetic
+    data (if needed) -> balance classes -> AutoML search (with light
+    hyperparameter tuning) -> return best model + report.
     """
 
     if target_col not in df.columns:
@@ -175,9 +230,17 @@ def train_and_select_best(df: pd.DataFrame, target_col: str, test_size: float = 
         X_scaled, y, test_size=test_size, random_state=random_state
     )
 
+    # Stage 4b: Synthetic data padding (training split only -- test split stays real)
+    synthetic_added = 0
+    if use_synthetic:
+        X_train, y_train, synthetic_added = pad_with_synthetic_data(
+            X_train, y_train, task_type, synthetic_min_rows, random_state
+        )
+    synthetic_applied = synthetic_added > 0
+
     # Balance classes with SMOTE if classification + imbalance is significant
     smote_applied = False
-    if task_type == "classification" and use_smote and _SMOTE_AVAILABLE:
+    if task_type == "classification" and use_balancing and _SMOTE_AVAILABLE:
         counts = y_train.value_counts()
         if len(counts) > 1 and counts.min() / counts.max() < 0.5 and counts.min() >= 6:
             try:
@@ -247,6 +310,7 @@ def train_and_select_best(df: pd.DataFrame, target_col: str, test_size: float = 
         "best_model_name": best_name,
         "best_params": best_params.get(best_name),
         "task_type": task_type,
+        "target_col": target_col,
         "metrics": metrics,
         "encoders": encoders,
         "feature_cols": feature_cols,
@@ -254,6 +318,11 @@ def train_and_select_best(df: pd.DataFrame, target_col: str, test_size: float = 
         "scaler": scaler,
         "scaled_cols": scaled_cols,
         "smote_applied": smote_applied,
+        "balance_applied": smote_applied,
+        "balance_method": "SMOTE" if smote_applied else "None",
+        "synthetic_applied": synthetic_applied,
+        "synthetic_added": synthetic_added,
+        "test_rows": len(X_test),
         "profile_before": profile_before,
         "profile_after": profile_after,
     }

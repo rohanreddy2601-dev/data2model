@@ -238,13 +238,37 @@ if numeric_cols:
 # ---------------------------------------------------------------------------
 # 3. Train a model
 # ---------------------------------------------------------------------------
-st.header("3. Train a model")
+st.header("3. Data augmentation & balancing")
+
+aug_col1, aug_col2, aug_col3 = st.columns(3)
+with aug_col1:
+    use_synthetic = st.checkbox("Generate synthetic training data", value=True)
+with aug_col2:
+    synthetic_min_rows = st.number_input(
+        "Minimum training rows", min_value=50, max_value=10000, value=500, step=50
+    )
+with aug_col3:
+    use_balancing = st.checkbox("Balance imbalanced classes", value=True)
+
+st.info(
+    "Safety design: synthetic data and class balancing are applied only to the "
+    "training split. The real test split stays untouched, so the final metrics "
+    "measure performance on real data."
+)
+
+st.header("4. Train a model")
 
 target_col = st.selectbox("Select the target column (what you want to predict)", df.columns)
 
-if st.button("🚀 Run full pipeline (clean → engineer → AutoML)"):
-    with st.spinner("Cleaning data, engineering features, training and tuning models..."):
-        result = train_and_select_best(df, target_col)
+if st.button("🚀 Run full pipeline (clean → engineer → augment → AutoML)"):
+    with st.spinner("Cleaning data, engineering features, augmenting, training and tuning models..."):
+        result = train_and_select_best(
+            df,
+            target_col,
+            use_synthetic=use_synthetic,
+            synthetic_min_rows=int(synthetic_min_rows),
+            use_balancing=use_balancing,
+        )
     st.session_state["result"] = result
     st.success(f"Best model: {result['best_model_name']} ({result['task_type']})")
 
@@ -258,8 +282,17 @@ if "result" in st.session_state:
     c2.metric("Missing values", f"{after['missing_pct']}%", delta=round(after['missing_pct'] - before['missing_pct'], 2), delta_color="inverse")
     c3.metric("Duplicate rows", f"{after['duplicate_pct']}%", delta=round(after['duplicate_pct'] - before['duplicate_pct'], 2), delta_color="inverse")
 
-    if result["smote_applied"]:
-        st.info("Class imbalance detected — SMOTE was applied to balance the training data.")
+    st.subheader("What the system changed")
+    a, b, d = st.columns(3)
+    a.metric("Synthetic rows added", result["synthetic_added"])
+    b.metric("Balancing", result["balance_method"])
+    d.metric("Real test rows", result["test_rows"])
+
+    if result["synthetic_applied"]:
+        st.success(f"🧪 Added {result['synthetic_added']} synthetic rows to the training set.")
+
+    if result["balance_applied"]:
+        st.success(f"⚖️ Class imbalance detected. Applied {result['balance_method']} to the training set.")
 
     st.subheader("AutoML model comparison (with hyperparameter tuning)")
     metrics_df = pd.DataFrame(result["metrics"]).T
@@ -274,9 +307,9 @@ if "result" in st.session_state:
         st.bar_chart(importance_df.set_index("Feature"))
 
     # -----------------------------------------------------------------------
-    # 4. Live prediction
+    # 5. Live prediction
     # -----------------------------------------------------------------------
-    st.header("4. Try a live prediction")
+    st.header("5. Try a live prediction")
     st.caption("Enter values below and see the model predict in real time -- this is the part judges love.")
 
     input_dict = {}
