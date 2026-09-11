@@ -7,7 +7,7 @@ Upload any raw CSV, and the app automatically profiles it, cleans it, balances i
 trains multiple ML models with hyperparameter tuning, and explains the best one in plain English.
 
 ## Live Demo
-_(Add your Streamlit Cloud URL here once deployed)_
+data-2-model.streamlit.app
 
 ## Pipeline
 
