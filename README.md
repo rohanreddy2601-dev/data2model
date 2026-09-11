@@ -67,7 +67,7 @@ Opens at `http://localhost:8501`.
 3. Select this repo (`data2model`), branch `main`, main file `app.py`.
 4. Under **Advanced settings -> Secrets**, add:
    ```
-   OPENAI_API_KEY = "your-key-here"
+   OPENAI_API_KEY = "1234"
    ```
 5. Deploy. You'll get a live URL to put on your pitch slide.
 
