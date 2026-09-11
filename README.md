@@ -51,8 +51,8 @@ Opens at `http://localhost:8501`.
 1. Get an API key from [OpenAI](https://platform.openai.com/).
 2. Set it as an environment variable:
    ```bash
-   export OPENAI_API_KEY="your-key-here"      # Mac/Linux
-   setx OPENAI_API_KEY "your-key-here"         # Windows
+   export OPENAI_API_KEY="data2model-hackathon"      # Mac/Linux
+   setx OPENAI_API_KEY "data2model-hackathon"         # Windows
    ```
 3. Test it directly:
    ```bash
