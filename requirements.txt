@@ -1,13 +1,9 @@
---extra-index-url https://download.pytorch.org/whl/cpu
-streamlit
-pandas
-numpy
-scikit-learn
-matplotlib
-seaborn
+streamlit==1.63.0
+pandas==2.2.1
+numpy==1.26.4
+scikit-learn==1.9.1
+matplotlib==3.11.1
+seaborn==0.13.2
 openai
-imbalanced-learn
+imbalanced-learn==0.14.2
 scipy
-torch
-torchvision
-pillow
