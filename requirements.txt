@@ -1,3 +1,4 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
 streamlit
 pandas
 numpy
@@ -7,5 +8,6 @@ seaborn
 openai
 imbalanced-learn
 scipy
-scikit-image
+torch
+torchvision
 pillow
