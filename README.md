@@ -1,4 +1,4 @@
-# data2model — AutoPrep
+# Data2Model — AutoPrep
 
 **Turning limited data into validated, ML-ready data — and finding the best model, automatically.**
 
